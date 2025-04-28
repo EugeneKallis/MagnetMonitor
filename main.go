@@ -1,135 +1,85 @@
-// main.go
 package main
 
 import (
 	"context"
-	"fmt"
+	_ "embed"
 	"io/fs"
 	"os"
 	"path/filepath"
 	"strings"
 
-	"github.com/lxn/walk"
-	. "github.com/lxn/walk/declarative"
+	"github.com/getlantern/systray"
+	"github.com/sqweek/dialog"
 	"golang.design/x/clipboard"
 )
 
+//go:embed icon.ico
+var iconData []byte
+
 func main() {
-	// Initialize the clipboard watcher
+	// 1) Initialize clipboard watcher
 	if err := clipboard.Init(); err != nil {
-		walk.MsgBox(nil, "Error", "clipboard.Init failed: "+err.Error(), walk.MsgBoxIconError)
+		println("clipboard.Init error:", err.Error())
 		return
 	}
 
-	// Build the hidden main window + tray icon
-	var ni *walk.NotifyIcon
-	MainWindow{
-		AssignTo: &ni,
-		Visible:  false,
-		Stager:   NewTrayIcon(),
-		Title:    "Magnet Watcher",
-		OnInitialize: func() {
-			ni.SetToolTip("Magnet Clipboard Watcher")
-		},
-		MenuItems: []MenuItem{
-			{Text: "E&xit", OnTriggered: func() { ni.Dispose(); os.Exit(0) }},
-		},
-	}.Run()
+	// 2) Start watching in the background
+	go watchClipboard(context.Background())
 
-	// Launch the watcher in the background
-	go watchLoop()
-
-	// Run the tray icon message loop
-	walk.RunMainWindow()
+	// 3) Launch the tray icon
+	systray.Run(onReady, onExit)
 }
 
-// watchLoop watches for clipboard changes
-func watchLoop() {
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+func onReady() {
+	// Set embedded icon, title, and tooltip
+	systray.SetIcon(iconData)
+	systray.SetTitle("MagnetMon")
+	systray.SetTooltip("Magnet Clipboard Monitor")
 
+	// Quit menu
+	mQuit := systray.AddMenuItem("Quit", "Exit the app")
+	go func() {
+		<-mQuit.ClickedCh
+		systray.Quit()
+	}()
+}
+
+func onExit() {
+	// nothing to clean up
+}
+
+func watchClipboard(ctx context.Context) {
 	ch := clipboard.Watch(ctx, clipboard.FmtText)
 	for data := range ch {
 		txt := string(data)
 		if strings.HasPrefix(txt, "magnet:") {
-			// on a goroutine so we don’t block the watcher
-			go handleMagnet(txt)
+			saveMagnet(txt)
 		}
 	}
 }
 
-// handleMagnet shows a dialog to choose folder, then writes the file
-func handleMagnet(uri string) {
-	// run on main GUI thread
-	walk.Synchronize(func() {
-		dlg := newDialog()
-		choice := dlg.Run()
-
-		if choice == "" {
-			return // user closed dialog or cancelled
-		}
-
-		dir := filepath.Join(`C:\Users\ponzi`, choice)
-		if err := os.MkdirAll(dir, 0o755); err != nil {
-			walk.MsgBox(nil, "Error", "Could not create folder: "+err.Error(), walk.MsgBoxIconError)
-			return
-		}
-
-		// find a unique filename
-		base := filepath.Join(dir, "download.magnet")
-		path := uniquePath(base)
-
-		if err := os.WriteFile(path, []byte(uri), fs.ModePerm); err != nil {
-			walk.MsgBox(nil, "Error", "Could not write file: "+err.Error(), walk.MsgBoxIconError)
-			return
-		}
-	})
-}
-
-// uniquePath returns a non-existent filename by appending 1,2,3…
-func uniquePath(base string) string {
-	if _, err := os.Stat(base); os.IsNotExist(err) {
-		return base
+func saveMagnet(uri string) {
+	// Show Save As dialog with default filename
+	path, err := dialog.
+		File().
+		Filter("Magnet Files", "magnet").
+		Title("Save Magnet…").
+		SetStartFile("download.magnet").
+		Save()
+	if err != nil {
+		// user cancelled or error
+		return
 	}
-	ext := filepath.Ext(base)
-	name := strings.TrimSuffix(base, ext)
-	for i := 1; ; i++ {
-		candidate := fmt.Sprintf("%s%d%s", name, i, ext)
-		if _, err := os.Stat(candidate); os.IsNotExist(err) {
-			return candidate
-		}
+
+	// Ensure .magnet extension
+	if filepath.Ext(path) != ".magnet" {
+		path += ".magnet"
 	}
-}
 
-// newDialog builds a simple modal with two buttons
-func newDialog() *choiceDialog {
-	dlg := &choiceDialog{}
-	Dialog{
-		AssignTo: &dlg.Dialog,
-		Title:    "Download Type",
-		MinSize:  Size{200, 0},
-		Layout:   VBox{},
-		Children: []Widget{
-			Label{Text: "Choose where to save the magnet:"},
-			HSplitter{
-				Children: []Widget{
-					PushButton{Text: "special", OnClicked: func() { dlg.choice = "special"; dlg.Accept() }},
-					PushButton{Text: "vr", OnClicked: func() { dlg.choice = "vr"; dlg.Accept() }},
-				},
-			},
-		},
-	}.Run(dlg)
-	return dlg
-}
-
-type choiceDialog struct {
-	*walk.Dialog
-	choice string
-}
-
-func (d *choiceDialog) Run() string {
-	if d.choice == "" {
-		return ""
+	// Write file
+	if err := os.WriteFile(path, []byte(uri), fs.ModePerm); err != nil {
+		dialog.Message("Failed to write:\n%s", err.Error()).
+			Title("Error").
+			Error()
 	}
-	return d.choice
 }
