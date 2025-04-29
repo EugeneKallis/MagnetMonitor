@@ -3,10 +3,12 @@ package main
 import (
 	"context"
 	_ "embed"
+	"fmt"
 	"io/fs"
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/getlantern/systray"
 	"github.com/sqweek/dialog"
@@ -59,12 +61,16 @@ func watchClipboard(ctx context.Context) {
 }
 
 func saveMagnet(uri string) {
+	// generate a timestamped default filename
+	timestamp := time.Now().Format("20060102-150405")
+	defaultName := fmt.Sprintf("download-%s.magnet", timestamp)
+
 	// Show Save As dialog with default filename
 	path, err := dialog.
 		File().
 		Filter("Magnet Files", "magnet").
 		Title("Save Magnet…").
-		SetStartFile("download.magnet").
+		SetStartFile(defaultName).
 		Save()
 	if err != nil {
 		// user cancelled or error
