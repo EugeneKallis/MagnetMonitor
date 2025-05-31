@@ -18,6 +18,8 @@ import (
 //go:embed icon.ico
 var iconData []byte
 
+var lastMagnet string
+
 func main() {
 	// 1) Initialize clipboard watcher
 	if err := clipboard.Init(); err != nil {
@@ -55,7 +57,10 @@ func watchClipboard(ctx context.Context) {
 	for data := range ch {
 		txt := string(data)
 		if strings.HasPrefix(txt, "magnet:") {
-			saveMagnet(txt)
+			if txt != lastMagnet {
+				saveMagnet(txt)
+				lastMagnet = txt
+			}
 		}
 	}
 }
